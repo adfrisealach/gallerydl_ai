@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ source }} - Gallery View</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            color: #333;
+        }
+        .back-link {
+            color: #4CAF50;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .section {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        .section-header {
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        .section-header:hover {
+            background-color: #f0f0f0;
+        }
+        .section-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .section-count {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .toggle-icon {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .toggle-icon::after {
+            content: '▼';
+            font-size: 12px;
+        }
+        .section.collapsed .toggle-icon::after {
+            content: '▶';
+        }
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        .section.collapsed .gallery-grid {
+            display: none;
+        }
+        .media-item {
+            position: relative;
+            aspect-ratio: 1;
+            overflow: hidden;
+            border-radius: 8px;
+            background-color: #eee;
+            cursor: pointer;
+        }
+        .media-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .media-item:hover img {
+            transform: scale(1.05);
+            transition: transform 0.3s ease;
+        }
+        .media-item video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+        .media-item.playing video {
+            display: block;
+        }
+        .media-item.playing img {
+            display: none;
+        }
+        .play-button {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60px;
+            height: 60px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+        }
+        .media-item:hover .play-button {
+            opacity: 1;
+        }
+        .play-button::after {
+            content: '';
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 12px 0 12px 20px;
+            border-color: transparent transparent transparent white;
+            margin-left: 4px;
+        }
+        .media-item.playing .play-button {
+            display: none;
+        }
+        /* Lightbox styles */
+        .lightbox {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            cursor: pointer;
+        }
+        .lightbox.active {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .lightbox-content {
+            position: relative;
+            max-width: 90%;
+            max-height: 90vh;
+            margin: 20px;
+            cursor: default;
+        }
+        .lightbox-image {
+            max-width: 100%;
+            max-height: 90vh;
+            object-fit: contain;
+        }
+        .lightbox-close {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .lightbox-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            width: 40px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(0, 0, 0, 0.5);
+            user-select: none;
+        }
+        .lightbox-prev {
+            left: 20px;
+        }
+        .lightbox-next {
+            right: 20px;
+        }
+        @media (max-width: 768px) {
+            .gallery-grid {
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                gap: 10px;
+                padding: 10px;
+            }
+            .header {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+            .lightbox-nav {
+                width: 30px;
+                height: 45px;
+                font-size: 24px;
+            }
+            .lightbox-prev {
+                left: 10px;
+            }
+            .lightbox-next {
+                right: 10px;
+            }
+        }
+        .no-media {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ source }}</h1>
+            <a href="/" class="back-link">← Back to Downloads</a>
+        </div>
+
+        {% if files %}
+            {% set images = files|selectattr('type', 'equalto', 'image')|list %}
+            {% set videos = files|selectattr('type', 'equalto', 'video')|list %}
+            
+            {% if images %}
+            <div class="section" id="images-section">
+                <div class="section-header" onclick="toggleSection('images-section')">
+                    <div class="section-title">
+                        Images
+                        <span class="section-count">({{ images|length }})</span>
+                    </div>
+                    <div class="toggle-icon"></div>
+                </div>
+                <div class="gallery-grid">
+                    {% for file in images %}
+                        <div class="media-item" data-index="{{ loop.index0 }}">
+                            <img src="/media/{{ file.path }}" alt="{{ file.name }}" loading="lazy">
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if videos %}
+            <div class="section" id="videos-section">
+                <div class="section-header" onclick="toggleSection('videos-section')">
+                    <div class="section-title">
+                        Videos
+                        <span class="section-count">({{ videos|length }})</span>
+                    </div>
+                    <div class="toggle-icon"></div>
+                </div>
+                <div class="gallery-grid">
+                    {% for file in videos %}
+                        <div class="media-item">
+                            <img src="/media/{{ file.thumbnail }}" alt="{{ file.name }}" loading="lazy">
+                            <div class="play-button"></div>
+                            <video src="/media/{{ file.path }}" 
+                                   preload="metadata"
+                                   controls>
+                                Your browser does not support the video tag.
+                            </video>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        {% else %}
+            <div class="no-media">No media files found in this gallery.</div>
+        {% endif %}
+    </div>
+
+    <!-- Lightbox -->
+    <div class="lightbox" onclick="closeLightbox(event)">
+        <div class="lightbox-content">
+            <img class="lightbox-image" src="" alt="Enlarged image">
+            <div class="lightbox-close" onclick="closeLightbox(event)">×</div>
+            <div class="lightbox-nav lightbox-prev" onclick="navigateLightbox(-1, event)">‹</div>
+            <div class="lightbox-nav lightbox-next" onclick="navigateLightbox(1, event)">›</div>
+        </div>
+    </div>
+
+    <script>
+        let imageUrls = [];
+        let currentImageIndex = 0;
+
+        // Initialize lightbox functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const imagesSection = document.getElementById('images-section');
+            if (imagesSection) {
+                // Collect image URLs from existing img elements
+                imageUrls = Array.from(imagesSection.querySelectorAll('.media-item img')).map(img => img.src);
+                
+                // Add click handlers to image items
+                imagesSection.querySelectorAll('.media-item').forEach(item => {
+                    item.addEventListener('click', function() {
+                        const index = parseInt(this.dataset.index);
+                        openLightbox(imageUrls[index], index);
+                    });
+                });
+            }
+
+            // Restore section states
+            ['images-section', 'videos-section'].forEach(sectionId => {
+                const section = document.getElementById(sectionId);
+                if (section) {
+                    const isCollapsed = localStorage.getItem(sectionId) === 'true';
+                    if (isCollapsed) {
+                        section.classList.add('collapsed');
+                    }
+                }
+            });
+
+            // Handle video playback
+            document.querySelectorAll('.media-item').forEach(item => {
+                const video = item.querySelector('video');
+                if (!video) return; // Skip if not a video item
+                
+                item.addEventListener('click', function() {
+                    if (!item.classList.contains('playing')) {
+                        // Stop all other videos
+                        document.querySelectorAll('.media-item.playing').forEach(playingItem => {
+                            const playingVideo = playingItem.querySelector('video');
+                            playingVideo.pause();
+                            playingVideo.currentTime = 0;
+                            playingItem.classList.remove('playing');
+                        });
+                        
+                        // Play this video
+                        item.classList.add('playing');
+                        video.play();
+                    }
+                });
+                
+                video.addEventListener('ended', function() {
+                    item.classList.remove('playing');
+                    video.currentTime = 0;
+                });
+                
+                // Handle clicking on controls
+                video.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+            });
+        });
+
+        function openLightbox(imageUrl, index) {
+            const lightbox = document.querySelector('.lightbox');
+            const lightboxImage = lightbox.querySelector('.lightbox-image');
+            
+            currentImageIndex = index;
+            lightboxImage.src = imageUrl;
+            lightbox.classList.add('active');
+            
+            // Prevent scrolling of the background
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox(event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            const lightbox = document.querySelector('.lightbox');
+            lightbox.classList.remove('active');
+            
+            // Restore scrolling
+            document.body.style.overflow = '';
+        }
+
+        function navigateLightbox(direction, event) {
+            event.stopPropagation();
+            
+            currentImageIndex = (currentImageIndex + direction + imageUrls.length) % imageUrls.length;
+            const lightboxImage = document.querySelector('.lightbox-image');
+            lightboxImage.src = imageUrls[currentImageIndex];
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', function(event) {
+            const lightbox = document.querySelector('.lightbox');
+            if (!lightbox.classList.contains('active')) return;
+            
+            switch(event.key) {
+                case 'Escape':
+                    closeLightbox();
+                    break;
+                case 'ArrowLeft':
+                    navigateLightbox(-1, event);
+                    break;
+                case 'ArrowRight':
+                    navigateLightbox(1, event);
+                    break;
+            }
+        });
+
+        // Section collapse/expand
+        function toggleSection(sectionId) {
+            const section = document.getElementById(sectionId);
+            section.classList.toggle('collapsed');
+            localStorage.setItem(sectionId, section.classList.contains('collapsed'));
+        }
+    </script>
+</body>
+</html>

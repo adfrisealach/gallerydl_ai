@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, send_from_directory
 import subprocess
 import os
 import logging
@@ -7,6 +7,7 @@ import queue
 import time
 import re
 import json
+import ffmpeg
 from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
@@ -74,6 +75,40 @@ def validate_url(url):
     except Exception:
         return None, None, "Invalid URL format"
 
+def generate_thumbnail(video_path):
+    """Generate a thumbnail for a video file."""
+    try:
+        thumbnail_path = video_path + '.thumb.jpg'
+        
+        # Skip if thumbnail already exists
+        if os.path.exists(thumbnail_path):
+            return thumbnail_path
+            
+        # Generate thumbnail using ffmpeg
+        stream = ffmpeg.input(video_path)
+        stream = ffmpeg.filter(stream, 'select', 'gte(n,1)')  # Select first frame
+        stream = ffmpeg.output(stream, thumbnail_path, vframes=1)
+        ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+        
+        return thumbnail_path
+    except Exception as e:
+        app.logger.error(f"Error generating thumbnail for {video_path}: {str(e)}")
+        return None
+
+def process_existing_videos():
+    """Generate thumbnails for all existing videos."""
+    downloads_path = 'downloads'
+    if not os.path.exists(downloads_path):
+        return
+        
+    video_extensions = {'.mp4', '.webm', '.mov', '.avi', '.mkv'}
+    
+    for root, _, files in os.walk(downloads_path):
+        for filename in files:
+            if any(filename.lower().endswith(ext) for ext in video_extensions):
+                video_path = os.path.join(root, filename)
+                generate_thumbnail(video_path)
+
 class DownloadTracker:
     def __init__(self):
         self.download_count = 0
@@ -102,6 +137,11 @@ def stream_process_output(process, url_id):
     
     def handle_process_completion():
         app.logger.debug(f"Process completed - Files found: {len(files_found)}, Downloads: {len(files_downloaded)}")
+        
+        # Generate thumbnails for any new videos
+        for file_path in files_downloaded:
+            if any(ext in file_path.lower() for ext in ['.mp4', '.webm', '.mov', '.avi', '.mkv']):
+                generate_thumbnail(file_path)
         
         # If we found and downloaded at least one file
         if len(files_downloaded) > 0:
@@ -180,6 +220,70 @@ def stream_process_output(process, url_id):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/gallery/<source>')
+def gallery(source):
+    """Serve a gallery view for a specific source."""
+    try:
+        downloads_path = 'downloads'
+        source_path = os.path.join(downloads_path, source)
+        
+        if not os.path.exists(source_path):
+            return "Gallery not found", 404
+            
+        files = []
+        for root, _, filenames in os.walk(source_path):
+            for filename in filenames:
+                # Skip thumbnail files
+                if filename.endswith('.thumb.jpg'):
+                    continue
+                    
+                filepath = os.path.join(root, filename)
+                rel_path = os.path.relpath(filepath, downloads_path)
+                
+                # Get file extension
+                _, ext = os.path.splitext(filename)
+                ext = ext.lower()
+                
+                # Determine if it's an image or video
+                media_type = 'image' if ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'] else 'video' if ext in ['.mp4', '.webm', '.mov', '.avi', '.mkv'] else 'unknown'
+                
+                if media_type != 'unknown':
+                    file_info = {
+                        'name': filename,
+                        'path': rel_path,
+                        'type': media_type
+                    }
+                    
+                    # Add thumbnail path for videos
+                    if media_type == 'video':
+                        thumbnail_path = filepath + '.thumb.jpg'
+                        if os.path.exists(thumbnail_path):
+                            file_info['thumbnail'] = os.path.relpath(thumbnail_path, downloads_path)
+                    
+                    files.append(file_info)
+        
+        # Sort files by name
+        files.sort(key=lambda x: x['name'])
+        return render_template('gallery.html', source=source, files=files)
+        
+    except Exception as e:
+        app.logger.error(f'Error serving gallery: {str(e)}')
+        return f"Error: {str(e)}", 500
+
+@app.route('/media/<path:filename>')
+def serve_media(filename):
+    """Serve media files from the downloads directory."""
+    return send_from_directory('downloads', filename)
+
+@app.route('/generate-thumbnails', methods=['POST'])
+def generate_thumbnails():
+    """Generate thumbnails for all existing videos."""
+    try:
+        process_existing_videos()
+        return jsonify({'status': 'success', 'message': 'Thumbnails generated successfully'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/download', methods=['POST'])
 def download():
@@ -300,6 +404,10 @@ def list_downloads():
         files = []
         for root, _, filenames in os.walk(downloads_path):
             for filename in filenames:
+                # Skip thumbnail files
+                if filename.endswith('.thumb.jpg'):
+                    continue
+                    
                 filepath = os.path.join(root, filename)
                 rel_path = os.path.relpath(filepath, downloads_path)
                 # Split the path to get site and username
@@ -321,4 +429,6 @@ def list_downloads():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    # Generate thumbnails for existing videos on startup
+    process_existing_videos()
     app.run(host='0.0.0.0', port=5001)
