@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
-<!-- Previous head content and styles remain unchanged until file-stats class -->
+<!-- Previous head content and styles remain unchanged until source-files class -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -157,75 +157,26 @@
             margin-top: 20px;
         }
         .source-group {
-            margin-bottom: 20px;
+            margin-bottom: 10px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            overflow: hidden;
+            background-color: #f8f9fa;
+            padding: 15px;
         }
         .source-header {
-            background-color: #f8f9fa;
-            padding: 10px 15px;
-            font-weight: bold;
-            color: #333;
-            border-bottom: 1px solid #ddd;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            cursor: pointer;
-            user-select: none;
+            color: #333;
         }
-        .source-header:hover {
-            background-color: #f0f0f0;
-        }
-        .source-header .toggle-icon {
-            width: 20px;
-            height: 20px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 10px;
-            transition: transform 0.3s ease;
-        }
-        .source-header .toggle-icon::before {
-            content: '▼';
-            font-size: 12px;
-        }
-        .source-header.collapsed .toggle-icon::before {
-            content: '▶';
-        }
-        .source-files {
-            max-height: 300px;
-            overflow-y: auto;
-            transition: max-height 0.3s ease-out;
-        }
-        .source-files.collapsed {
-            max-height: 0;
-            overflow: hidden;
-        }
-        .source-files table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .source-files th, .source-files td {
-            padding: 12px 8px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        .source-files tr:hover {
-            background-color: #f5f5f5;
+        .source-info {
+            font-weight: bold;
         }
         .no-files {
             text-align: center;
             padding: 20px;
             color: #666;
             font-style: italic;
-        }
-        .source-info {
-            display: flex;
-            align-items: center;
-        }
-        .source-name {
-            margin-left: 5px;
         }
         .file-stats {
             display: flex;
@@ -318,19 +269,6 @@
             return videoExtensions.some(ext => filename.toLowerCase().endsWith(ext));
         }
 
-        function toggleSourceGroup(sourceHeader) {
-            const sourceGroup = sourceHeader.closest('.source-group');
-            const sourceFiles = sourceGroup.querySelector('.source-files');
-            const isCollapsed = sourceHeader.classList.contains('collapsed');
-            
-            // Toggle classes
-            sourceHeader.classList.toggle('collapsed');
-            sourceFiles.classList.toggle('collapsed');
-            
-            // Store collapse state
-            localStorage.setItem(`source-${sourceHeader.dataset.source}`, isCollapsed ? 'expanded' : 'collapsed');
-        }
-
         function updateDownloadsList() {
             fetch('/downloads')
                 .then(response => response.json())
@@ -347,13 +285,11 @@
                     data.files.forEach(file => {
                         if (!filesBySource[file.source]) {
                             filesBySource[file.source] = {
-                                files: [],
                                 imageCount: 0,
                                 videoCount: 0,
                                 totalSize: 0
                             };
                         }
-                        filesBySource[file.source].files.push(file);
                         filesBySource[file.source].totalSize += file.size;
                         
                         if (isImageFile(file.name)) {
@@ -365,43 +301,17 @@
 
                     let html = '';
                     Object.entries(filesBySource).forEach(([source, data]) => {
-                        const isCollapsed = localStorage.getItem(`source-${source}`) === 'collapsed';
                         const totalSizeMB = (data.totalSize / (1024 * 1024)).toFixed(2);
                         
                         html += `
                             <div class="source-group">
-                                <div class="source-header ${isCollapsed ? 'collapsed' : ''}" 
-                                     onclick="toggleSourceGroup(this)"
-                                     data-source="${source}">
-                                    <div class="source-info">
-                                        <span class="toggle-icon"></span>
-                                        <span class="source-name">${source}</span>
-                                    </div>
+                                <div class="source-header">
+                                    <div class="source-info">${source}</div>
                                     <div class="file-stats">
                                         <span class="stat-item">${data.imageCount} images</span>
                                         <span class="stat-item">${data.videoCount} videos</span>
                                         <span class="stat-item">${totalSizeMB} MB</span>
                                     </div>
-                                </div>
-                                <div class="source-files ${isCollapsed ? 'collapsed' : ''}">
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>Filename</th>
-                                                <th>Path</th>
-                                                <th>Size</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            ${data.files.map(file => `
-                                                <tr>
-                                                    <td>${file.name}</td>
-                                                    <td>${file.path}</td>
-                                                    <td>${formatFileSize(file.size)}</td>
-                                                </tr>
-                                            `).join('')}
-                                        </tbody>
-                                    </table>
                                 </div>
                             </div>
                         `;
