@@ -7,7 +7,6 @@ import queue
 import time
 import re
 import json
-import ffmpeg
 from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
@@ -75,39 +74,23 @@ def validate_url(url):
     except Exception:
         return None, None, "Invalid URL format"
 
-def generate_thumbnail(video_path):
-    """Generate a thumbnail for a video file."""
-    try:
-        thumbnail_path = video_path + '.thumb.jpg'
-        
-        # Skip if thumbnail already exists
-        if os.path.exists(thumbnail_path):
-            return thumbnail_path
-            
-        # Generate thumbnail using ffmpeg
-        stream = ffmpeg.input(video_path)
-        stream = ffmpeg.filter(stream, 'select', 'gte(n,1)')  # Select first frame
-        stream = ffmpeg.output(stream, thumbnail_path, vframes=1)
-        ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
-        
-        return thumbnail_path
-    except Exception as e:
-        app.logger.error(f"Error generating thumbnail for {video_path}: {str(e)}")
-        return None
-
-def process_existing_videos():
-    """Generate thumbnails for all existing videos."""
-    downloads_path = 'downloads'
-    if not os.path.exists(downloads_path):
-        return
-        
-    video_extensions = {'.mp4', '.webm', '.mov', '.avi', '.mkv'}
+def build_gallery_dl_command(url, download_path, options):
+    """Build gallery-dl command with filters based on options."""
+    command = ['gallery-dl', url, '-D', download_path, '--verbose']
     
-    for root, _, files in os.walk(downloads_path):
-        for filename in files:
-            if any(filename.lower().endswith(ext) for ext in video_extensions):
-                video_path = os.path.join(root, filename)
-                generate_thumbnail(video_path)
+    # Add post limit if specified
+    if options.get('postLimit') == 'limited':
+        post_count = options.get('postCount', 20)
+        command.extend(['-c', str(post_count)])
+    
+    # Add media type filter if specified
+    media_type = options.get('mediaType')
+    if media_type == 'images':
+        command.extend(['--filter', "extension in ['jpg','jpeg','png','gif','webp']"])
+    elif media_type == 'videos':
+        command.extend(['--filter', "extension in ['mp4','webm','mov']"])
+    
+    return command
 
 class DownloadTracker:
     def __init__(self):
@@ -140,7 +123,7 @@ def stream_process_output(process, url_id):
         
         # Generate thumbnails for any new videos
         for file_path in files_downloaded:
-            if any(ext in file_path.lower() for ext in ['.mp4', '.webm', '.mov', '.avi', '.mkv']):
+            if any(ext in file_path.lower() for ext in ['.mp4', '.webm', '.mov']):
                 generate_thumbnail(file_path)
         
         # If we found and downloaded at least one file
@@ -276,18 +259,16 @@ def serve_media(filename):
     """Serve media files from the downloads directory."""
     return send_from_directory('downloads', filename)
 
-@app.route('/generate-thumbnails', methods=['POST'])
-def generate_thumbnails():
-    """Generate thumbnails for all existing videos."""
-    try:
-        process_existing_videos()
-        return jsonify({'status': 'success', 'message': 'Thumbnails generated successfully'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
 @app.route('/download', methods=['POST'])
 def download():
-    url = request.json.get('url', '').strip()
+    data = request.json
+    url = data.get('url', '').strip()
+    options = {
+        'postLimit': data.get('postLimit', 'all'),
+        'postCount': data.get('postCount'),
+        'mediaType': data.get('mediaType', 'all')
+    }
+    
     url, folder_name, error = validate_url(url)
     
     if error:
@@ -314,9 +295,12 @@ def download():
         # Create message queue for this download
         message_queues[url_id] = queue.Queue()
         
+        # Build gallery-dl command with options
+        command = build_gallery_dl_command(url, download_path, options)
+        
         # Run gallery-dl command with real-time output
         process = subprocess.Popen(
-            ['gallery-dl', url, '-D', download_path, '--verbose'],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -429,6 +413,4 @@ def list_downloads():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Generate thumbnails for existing videos on startup
-    process_existing_videos()
     app.run(host='0.0.0.0', port=5001)

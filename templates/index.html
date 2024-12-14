@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
-<!-- Previous head content remains the same until source-info class -->
+<!-- Previous head content and styles remain unchanged -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gallery-DL Web Interface</title>
     <style>
-        /* Previous styles remain the same until source-info */
+        /* Previous styles remain unchanged */
         body {
             font-family: Arial, sans-serif;
             max-width: 1000px;
@@ -21,32 +21,130 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
         }
-        .completion-banner {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 15px 30px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            z-index: 1000;
-            display: none;
-            animation: slideDown 0.5s ease-out;
-            max-width: 80%;
-            text-align: center;
-            font-weight: bold;
+        .instructions {
+            background-color: #e8f5e9;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border-left: 4px solid #4CAF50;
         }
-        .completion-banner.success {
+        .instructions h3 {
+            margin-top: 0;
+            color: #2e7d32;
+        }
+        .instructions ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin-bottom: 5px;
+            color: #1b5e20;
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+        input[type="text"],
+        input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        input[type="text"]:focus,
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 5px rgba(76,175,80,0.2);
+        }
+        input[type="number"] {
+            width: 80px;
+        }
+        button {
             background-color: #4CAF50;
             color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+            margin-top: 20px;
         }
-        .completion-banner.error {
-            background-color: #f44336;
-            color: white;
+        button:hover {
+            background-color: #45a049;
         }
-        @keyframes slideDown {
-            from { transform: translate(-50%, -100%); }
-            to { transform: translate(-50%, 0); }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .options-container {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+            margin-top: 20px;
+            display: flex;
+            gap: 40px;
+        }
+        .option-group {
+            flex: 1;
+        }
+        .option-group h4 {
+            margin: 0 0 15px 0;
+            color: #444;
+            font-size: 1em;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .radio-option input[type="radio"] {
+            margin: 0;
+        }
+        .radio-option label {
+            margin: 0;
+            cursor: pointer;
+        }
+        .post-limit-input {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            margin-left: 24px;
+        }
+        .post-limit-input input {
+            width: 80px;
+        }
+        .post-limit-input input:disabled {
+            background-color: #f5f5f5;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+            background-color: white;
+            border: 1px solid #ddd;
+            font-size: 14px;
         }
         .log-entry {
             padding: 8px 12px;
@@ -80,72 +178,43 @@
             color: #616161;
             border-left: 4px solid #9e9e9e;
         }
-        .input-group {
-            margin-bottom: 20px;
+        .tooltip {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            margin-left: 4px;
         }
-        .input-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #333;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-            font-size: 16px;
-        }
-        input[type="text"]:focus {
-            outline: none;
-            border-color: #4CAF50;
-            box-shadow: 0 0 5px rgba(76,175,80,0.2);
-        }
-        button {
-            background-color: #4CAF50;
+        .tooltip-icon {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background-color: #666;
             color: white;
-            padding: 12px 24px;
-            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            cursor: help;
+        }
+        .tooltip-text {
+            visibility: hidden;
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #333;
+            color: white;
+            padding: 8px 12px;
             border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background-color 0.3s;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        button:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-        }
-        #status {
-            margin-top: 20px;
-            padding: 10px;
-            border-radius: 4px;
-            max-height: 400px;
-            overflow-y: auto;
-            background-color: white;
-            border: 1px solid #ddd;
             font-size: 14px;
+            white-space: nowrap;
+            z-index: 1;
+            opacity: 0;
+            transition: opacity 0.3s;
         }
-        .instructions {
-            background-color: #e8f5e9;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            border-left: 4px solid #4CAF50;
-        }
-        .instructions h3 {
-            margin-top: 0;
-            color: #2e7d32;
-        }
-        .instructions ul {
-            margin: 10px 0;
-            padding-left: 20px;
-        }
-        .instructions li {
-            margin-bottom: 5px;
-            color: #1b5e20;
+        .tooltip:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
         }
         .downloads-list {
             margin-top: 20px;
@@ -175,12 +244,6 @@
             color: #003c8f;
             text-decoration: underline;
         }
-        .no-files {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-            font-style: italic;
-        }
         .file-stats {
             display: flex;
             gap: 15px;
@@ -192,11 +255,21 @@
             align-items: center;
             gap: 5px;
         }
+        .no-files {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-style: italic;
+        }
+        @media (max-width: 768px) {
+            .options-container {
+                flex-direction: column;
+                gap: 20px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div id="completionBanner" class="completion-banner"></div>
-
     <div class="container">
         <h1>Gallery-DL Web Interface</h1>
         
@@ -207,7 +280,7 @@
                 <li>The URL should be from a supported site (e.g., Instagram, Twitter, DeviantArt, etc.)</li>
                 <li>You can enter URLs with or without 'https://' prefix</li>
                 <li>Downloads will be organized by site and username</li>
-                <li>Progress and any errors will be shown in real-time below</li>
+                <li>Use the options below to customize your download</li>
             </ul>
         </div>
 
@@ -215,6 +288,57 @@
             <label for="url">Enter URL to download:</label>
             <input type="text" id="url" placeholder="e.g., instagram.com/username">
         </div>
+
+        <div class="options-container">
+            <div class="option-group">
+                <h4>
+                    Download Limits
+                    <span class="tooltip">
+                        <span class="tooltip-icon">?</span>
+                        <span class="tooltip-text">Choose how many recent posts to download</span>
+                    </span>
+                </h4>
+                <div class="radio-group">
+                    <div class="radio-option">
+                        <input type="radio" id="all-posts" name="post-limit" value="all" checked>
+                        <label for="all-posts">All posts</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" id="limited-posts" name="post-limit" value="limited">
+                        <label for="limited-posts">Last</label>
+                        <div class="post-limit-input">
+                            <input type="number" id="post-count" value="20" min="1" disabled>
+                            <label for="post-count">posts</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="option-group">
+                <h4>
+                    Content Type
+                    <span class="tooltip">
+                        <span class="tooltip-icon">?</span>
+                        <span class="tooltip-text">Choose which types of media to download</span>
+                    </span>
+                </h4>
+                <div class="radio-group">
+                    <div class="radio-option">
+                        <input type="radio" id="all-media" name="media-type" value="all" checked>
+                        <label for="all-media">All media</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" id="images-only" name="media-type" value="images">
+                        <label for="images-only">Images only</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" id="videos-only" name="media-type" value="videos">
+                        <label for="videos-only">Videos only</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <button id="downloadBtn" onclick="startDownload()">Download</button>
         
         <div id="status"></div>
@@ -226,49 +350,54 @@
     </div>
 
     <script>
-        let currentDownloadId = null;
-        let eventSource = null;
-        let refreshInterval = null;
+        // Load saved settings
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedSettings = JSON.parse(localStorage.getItem('downloadSettings') || '{}');
+            
+            if (savedSettings.postLimit) {
+                document.querySelector(`input[name="post-limit"][value="${savedSettings.postLimit}"]`).checked = true;
+                if (savedSettings.postLimit === 'limited') {
+                    const postCount = document.getElementById('post-count');
+                    postCount.disabled = false;
+                    postCount.value = savedSettings.postCount || 20;
+                }
+            }
+            
+            if (savedSettings.mediaType) {
+                document.querySelector(`input[name="media-type"][value="${savedSettings.mediaType}"]`).checked = true;
+            }
 
-        function showCompletionBanner(message, type) {
-            const banner = document.getElementById('completionBanner');
-            banner.textContent = message;
-            banner.className = `completion-banner ${type}`;
-            banner.style.display = 'block';
+            // Initial downloads list
+            updateDownloadsList();
+        });
 
-            setTimeout(() => {
-                banner.style.animation = 'none';
-                banner.offsetHeight;
-                banner.style.animation = null;
-                banner.style.display = 'none';
-            }, 8000);
-        }
+        // Handle post limit radio changes
+        document.querySelectorAll('input[name="post-limit"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                const postCount = document.getElementById('post-count');
+                postCount.disabled = this.value !== 'limited';
+                saveSettings();
+            });
+        });
 
-        function addLogEntry(message, status) {
-            const statusDiv = document.getElementById('status');
-            const entry = document.createElement('div');
-            entry.className = `log-entry ${status}`;
-            entry.textContent = message;
-            statusDiv.appendChild(entry);
-            statusDiv.scrollTop = statusDiv.scrollHeight;
-        }
+        // Handle post count changes
+        document.getElementById('post-count').addEventListener('change', function() {
+            if (this.value < 1) this.value = 1;
+            saveSettings();
+        });
 
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 Bytes';
-            const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
+        // Handle media type changes
+        document.querySelectorAll('input[name="media-type"]').forEach(radio => {
+            radio.addEventListener('change', saveSettings);
+        });
 
-        function isImageFile(filename) {
-            const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-            return imageExtensions.some(ext => filename.toLowerCase().endsWith(ext));
-        }
-
-        function isVideoFile(filename) {
-            const videoExtensions = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
-            return videoExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+        function saveSettings() {
+            const settings = {
+                postLimit: document.querySelector('input[name="post-limit"]:checked').value,
+                postCount: document.getElementById('post-count').value,
+                mediaType: document.querySelector('input[name="media-type"]:checked').value
+            };
+            localStorage.setItem('downloadSettings', JSON.stringify(settings));
         }
 
         function updateDownloadsList() {
@@ -282,6 +411,7 @@
                         return;
                     }
 
+                    // Group files by source
                     const filesBySource = {};
                     data.files.forEach(file => {
                         if (!filesBySource[file.source]) {
@@ -293,9 +423,9 @@
                         }
                         filesBySource[file.source].totalSize += file.size;
                         
-                        if (isImageFile(file.name)) {
+                        if (file.name.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/i)) {
                             filesBySource[file.source].imageCount++;
-                        } else if (isVideoFile(file.name)) {
+                        } else if (file.name.match(/\.(mp4|webm|mov|avi|mkv)$/i)) {
                             filesBySource[file.source].videoCount++;
                         }
                     });
@@ -325,33 +455,43 @@
                 .catch(error => console.error('Error fetching downloads:', error));
         }
 
+        function getDownloadOptions() {
+            const postLimit = document.querySelector('input[name="post-limit"]:checked').value;
+            const postCount = document.getElementById('post-count').value;
+            const mediaType = document.querySelector('input[name="media-type"]:checked').value;
+            
+            return {
+                url: document.getElementById('url').value.trim(),
+                postLimit: postLimit,
+                postCount: postLimit === 'limited' ? parseInt(postCount) : null,
+                mediaType: mediaType
+            };
+        }
+
         function startDownload() {
-            const url = document.getElementById('url').value.trim();
+            const options = getDownloadOptions();
             const statusDiv = document.getElementById('status');
             const downloadBtn = document.getElementById('downloadBtn');
             
-            if (!url) {
-                showCompletionBanner('Please enter a URL', 'error');
+            if (!options.url) {
+                addLogEntry('Please enter a URL', 'error');
                 return;
             }
 
+            // Clear previous status and disable button
             statusDiv.innerHTML = '';
             downloadBtn.disabled = true;
-            
-            if (refreshInterval) clearInterval(refreshInterval);
-            refreshInterval = setInterval(updateDownloadsList, 2000);
             
             fetch('/download', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ url: url })
+                body: JSON.stringify(options)
             })
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'started') {
-                    currentDownloadId = data.url_id;
                     listenToDownloadProgress(data.url_id);
                 } else {
                     handleDownloadError(data.message || 'Failed to start download');
@@ -364,25 +504,12 @@
 
         function handleDownloadError(message) {
             const downloadBtn = document.getElementById('downloadBtn');
-            showCompletionBanner(message, 'error');
+            addLogEntry(message, 'error');
             downloadBtn.disabled = false;
-            stopDownloadRefresh();
-        }
-
-        function stopDownloadRefresh() {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-                refreshInterval = null;
-            }
-            updateDownloadsList();
         }
 
         function listenToDownloadProgress(urlId) {
-            if (eventSource) {
-                eventSource.close();
-            }
-
-            eventSource = new EventSource(`/stream/${urlId}`);
+            const eventSource = new EventSource(`/stream/${urlId}`);
             const downloadBtn = document.getElementById('downloadBtn');
 
             eventSource.onmessage = function(event) {
@@ -390,17 +517,13 @@
 
                 try {
                     const data = JSON.parse(event.data);
-                    const message = data.message;
-                    const status = data.status;
-                    const isFinal = data.is_final;
+                    addLogEntry(data.message, data.status);
 
-                    addLogEntry(message, status);
-
-                    if (isFinal) {
-                        showCompletionBanner(message, status === 'completed' ? 'success' : 'error');
+                    if (data.is_final) {
                         downloadBtn.disabled = false;
                         eventSource.close();
-                        stopDownloadRefresh();
+                        // Update downloads list after completion
+                        updateDownloadsList();
                     }
                 } catch (error) {
                     console.error('Error parsing event data:', error);
@@ -410,17 +533,20 @@
             eventSource.onerror = function() {
                 eventSource.close();
                 downloadBtn.disabled = false;
-                stopDownloadRefresh();
             };
         }
 
-        document.getElementById('url').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                startDownload();
-            }
-        });
+        function addLogEntry(message, status) {
+            const statusDiv = document.getElementById('status');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${status}`;
+            entry.textContent = message;
+            statusDiv.appendChild(entry);
+            statusDiv.scrollTop = statusDiv.scrollHeight;
+        }
 
-        updateDownloadsList();
+        // Start periodic updates of downloads list
+        setInterval(updateDownloadsList, 5000);
     </script>
 </body>
 </html>
