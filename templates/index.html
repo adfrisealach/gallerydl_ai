@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+<!-- Previous head content and styles remain unchanged until file-stats class -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -226,6 +227,17 @@
         .source-name {
             margin-left: 5px;
         }
+        .file-stats {
+            display: flex;
+            gap: 15px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
     </style>
 </head>
 <body>
@@ -296,6 +308,16 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
+        function isImageFile(filename) {
+            const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+            return imageExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+        }
+
+        function isVideoFile(filename) {
+            const videoExtensions = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
+            return videoExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+        }
+
         function toggleSourceGroup(sourceHeader) {
             const sourceGroup = sourceHeader.closest('.source-group');
             const sourceFiles = sourceGroup.querySelector('.source-files');
@@ -324,15 +346,27 @@
                     const filesBySource = {};
                     data.files.forEach(file => {
                         if (!filesBySource[file.source]) {
-                            filesBySource[file.source] = [];
+                            filesBySource[file.source] = {
+                                files: [],
+                                imageCount: 0,
+                                videoCount: 0,
+                                totalSize: 0
+                            };
                         }
-                        filesBySource[file.source].push(file);
+                        filesBySource[file.source].files.push(file);
+                        filesBySource[file.source].totalSize += file.size;
+                        
+                        if (isImageFile(file.name)) {
+                            filesBySource[file.source].imageCount++;
+                        } else if (isVideoFile(file.name)) {
+                            filesBySource[file.source].videoCount++;
+                        }
                     });
 
                     let html = '';
-                    Object.entries(filesBySource).forEach(([source, files]) => {
-                        // Get stored collapse state
+                    Object.entries(filesBySource).forEach(([source, data]) => {
                         const isCollapsed = localStorage.getItem(`source-${source}`) === 'collapsed';
+                        const totalSizeMB = (data.totalSize / (1024 * 1024)).toFixed(2);
                         
                         html += `
                             <div class="source-group">
@@ -343,7 +377,11 @@
                                         <span class="toggle-icon"></span>
                                         <span class="source-name">${source}</span>
                                     </div>
-                                    <span class="file-count">${files.length} file${files.length !== 1 ? 's' : ''}</span>
+                                    <div class="file-stats">
+                                        <span class="stat-item">${data.imageCount} images</span>
+                                        <span class="stat-item">${data.videoCount} videos</span>
+                                        <span class="stat-item">${totalSizeMB} MB</span>
+                                    </div>
                                 </div>
                                 <div class="source-files ${isCollapsed ? 'collapsed' : ''}">
                                     <table>
@@ -355,7 +393,7 @@
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            ${files.map(file => `
+                                            ${data.files.map(file => `
                                                 <tr>
                                                     <td>${file.name}</td>
                                                     <td>${file.path}</td>
