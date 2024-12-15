@@ -85,7 +85,8 @@ def build_gallery_dl_command(url, download_path, options):
     # Add post limit if specified
     if options.get('postLimit') == 'limited':
         post_count = options.get('postCount', 20)
-        command.extend(['-c', str(post_count)])
+        # Use --range to limit the number of posts (1-N format for first N posts)
+        command.extend(['--range', f'1-{post_count}'])
     
     # Add media type filter if specified
     media_type = options.get('mediaType')
