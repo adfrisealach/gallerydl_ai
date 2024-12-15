@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gallery-DL Web Interface</title>
+    <!-- Use local Socket.IO client library -->
+    <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -201,6 +203,13 @@
             color: #7b1fa2;
             border-left: 4px solid #7b1fa2;
             font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .log-entry.progress .progress-percentage {
+            font-weight: bold;
+            color: #7b1fa2;
         }
         .log-entry.error {
             background-color: #ffebee;
@@ -358,6 +367,99 @@
             background-color: #6c757d;
             color: white;
         }
+        .progress-container {
+            margin-top: 10px;
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+        .progress-text {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #000;
+            font-size: 12px;
+            font-weight: bold;
+            text-shadow: 1px 1px 1px rgba(255, 255, 255, 0.5);
+        }
+        .advanced-settings {
+            margin-top: 20px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .advanced-settings-header {
+            padding: 15px 20px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #ddd;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .advanced-settings-header h4 {
+            margin: 0;
+            color: #444;
+            font-size: 1em;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .advanced-settings-content {
+            padding: 20px;
+            display: none;
+        }
+        .advanced-settings.expanded .advanced-settings-content {
+            display: block;
+        }
+        .advanced-settings-row {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .browser-select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 150px;
+        }
+        .cookie-checkbox {
+            margin: 0;
+        }
+        .advanced-settings-info {
+            background-color: #e3f2fd;
+            padding: 12px;
+            border-radius: 4px;
+            margin-top: 10px;
+            color: #1565c0;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .chevron {
+            transition: transform 0.3s ease;
+        }
+        .advanced-settings.expanded .chevron {
+            transform: rotate(180deg);
+        }
         @media (max-width: 768px) {
             .options-container {
                 flex-direction: column;
@@ -370,6 +472,13 @@
             }
             .stats-group {
                 flex-wrap: wrap;
+            }
+            .advanced-settings-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .browser-select {
+                width: 100%;
             }
         }
     </style>
@@ -444,9 +553,50 @@
             </div>
         </div>
 
+        <div class="advanced-settings" id="advancedSettings">
+            <div class="advanced-settings-header" onclick="toggleAdvancedSettings()">
+                <h4>
+                    Advanced Settings
+                    <span class="tooltip">
+                        <span class="tooltip-icon">?</span>
+                        <span class="tooltip-text">Configure authentication and advanced options</span>
+                    </span>
+                </h4>
+                <span class="chevron">▼</span>
+            </div>
+            <div class="advanced-settings-content">
+                <div class="advanced-settings-row">
+                    <select id="browserSelect" class="browser-select" onchange="saveAdvancedSettings()">
+                        <option value="chrome">Chrome</option>
+                        <option value="firefox">Firefox</option>
+                        <option value="safari">Safari</option>
+                        <option value="edge">Edge</option>
+                        <option value="opera">Opera</option>
+                        <option value="brave">Brave</option>
+                    </select>
+                    <label>
+                        <input type="checkbox" id="useCookies" class="cookie-checkbox" onchange="saveAdvancedSettings()">
+                        Use browser cookies for authentication
+                    </label>
+                </div>
+                <div class="advanced-settings-info">
+                    <strong>Authentication Help:</strong> If downloads fail due to authentication, try enabling browser cookies. 
+                    This will use your existing login session from the selected browser. Make sure you're logged into the site 
+                    in your browser before downloading.
+                </div>
+            </div>
+        </div>
+
         <div class="button-group">
             <button id="downloadBtn" onclick="startDownload()">Download</button>
             <button id="stopBtn" class="stop-btn" onclick="stopDownload()">Stop Download</button>
+        </div>
+        
+        <div id="progressContainer" class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+                <div class="progress-text">0%</div>
+            </div>
         </div>
         
         <div id="status"></div>
@@ -472,11 +622,39 @@
     <script>
         let currentDownloadId = null;
         let sourceToDelete = null;
+        let socket = null;
 
-        // Load saved settings
+        // Initialize Socket.IO connection
+        function initializeSocket() {
+            socket = io('/downloads');
+
+            socket.on('connect', () => {
+                console.log('Connected to WebSocket');
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Disconnected from WebSocket');
+            });
+
+            socket.on('download_update', (data) => {
+                handleDownloadUpdate(data);
+                // Auto-expand advanced settings if authentication error
+                if (data.status === 'error' && data.message.includes('authentication')) {
+                    expandAdvancedSettings();
+                }
+            });
+
+            socket.on('downloads_updated', () => {
+                updateDownloadsList();
+            });
+        }
+
+        // Load saved settings and initialize socket
         document.addEventListener('DOMContentLoaded', function() {
             const savedSettings = JSON.parse(localStorage.getItem('downloadSettings') || '{}');
+            const savedAdvancedSettings = JSON.parse(localStorage.getItem('advancedSettings') || '{}');
             
+            // Load basic settings
             if (savedSettings.postLimit) {
                 document.querySelector(`input[name="post-limit"][value="${savedSettings.postLimit}"]`).checked = true;
                 if (savedSettings.postLimit === 'limited') {
@@ -490,9 +668,44 @@
                 document.querySelector(`input[name="media-type"][value="${savedSettings.mediaType}"]`).checked = true;
             }
 
+            // Load advanced settings
+            if (savedAdvancedSettings.browser) {
+                document.getElementById('browserSelect').value = savedAdvancedSettings.browser;
+            }
+            if (savedAdvancedSettings.useCookies) {
+                document.getElementById('useCookies').checked = savedAdvancedSettings.useCookies;
+            }
+            if (savedAdvancedSettings.expanded) {
+                expandAdvancedSettings();
+            }
+
+            // Initialize WebSocket connection
+            initializeSocket();
+
             // Initial downloads list
             updateDownloadsList();
         });
+
+        function toggleAdvancedSettings() {
+            const settings = document.getElementById('advancedSettings');
+            settings.classList.toggle('expanded');
+            saveAdvancedSettings();
+        }
+
+        function expandAdvancedSettings() {
+            const settings = document.getElementById('advancedSettings');
+            settings.classList.add('expanded');
+            saveAdvancedSettings();
+        }
+
+        function saveAdvancedSettings() {
+            const settings = {
+                browser: document.getElementById('browserSelect').value,
+                useCookies: document.getElementById('useCookies').checked,
+                expanded: document.getElementById('advancedSettings').classList.contains('expanded')
+            };
+            localStorage.setItem('advancedSettings', JSON.stringify(settings));
+        }
 
         // Handle post limit radio changes
         document.querySelectorAll('input[name="post-limit"]').forEach(radio => {
@@ -521,6 +734,58 @@
                 mediaType: document.querySelector('input[name="media-type"]:checked').value
             };
             localStorage.setItem('downloadSettings', JSON.stringify(settings));
+        }
+
+        function updateProgressBar(progress) {
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = progressContainer.querySelector('.progress-fill');
+            const progressText = progressContainer.querySelector('.progress-text');
+            
+            if (progress) {
+                progressContainer.style.display = 'block';
+                progressFill.style.width = `${progress.percentage}%`;
+                progressText.textContent = `${progress.current} of ${progress.total} (${progress.percentage}%)`;
+            } else {
+                progressContainer.style.display = 'none';
+            }
+        }
+
+        function handleDownloadUpdate(data) {
+            addLogEntry(data.message, data.status, data.progress);
+
+            // Update progress bar
+            if (data.progress) {
+                updateProgressBar(data.progress);
+            }
+
+            if (data.is_final) {
+                const downloadBtn = document.getElementById('downloadBtn');
+                const stopBtn = document.getElementById('stopBtn');
+                downloadBtn.disabled = false;
+                stopBtn.classList.remove('visible');
+                stopBtn.disabled = false;
+                currentDownloadId = null;
+                // Hide progress bar on completion
+                updateProgressBar(null);
+            }
+        }
+
+        function addLogEntry(message, status, progress) {
+            const statusDiv = document.getElementById('status');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${status}`;
+            
+            if (status === 'progress' && progress) {
+                entry.innerHTML = `
+                    <span>${message}</span>
+                    <span class="progress-percentage">${progress.percentage}%</span>
+                `;
+            } else {
+                entry.textContent = message;
+            }
+            
+            statusDiv.appendChild(entry);
+            statusDiv.scrollTop = statusDiv.scrollHeight;
         }
 
         function showDeleteModal(source) {
@@ -615,12 +880,17 @@
             const postLimit = document.querySelector('input[name="post-limit"]:checked').value;
             const postCount = document.getElementById('post-count').value;
             const mediaType = document.querySelector('input[name="media-type"]:checked').value;
+            const advancedSettings = {
+                browser: document.getElementById('browserSelect').value,
+                useCookies: document.getElementById('useCookies').checked
+            };
             
             return {
                 url: document.getElementById('url').value.trim(),
                 postLimit: postLimit,
                 postCount: postLimit === 'limited' ? parseInt(postCount) : null,
-                mediaType: mediaType
+                mediaType: mediaType,
+                authentication: advancedSettings
             };
         }
 
@@ -629,6 +899,9 @@
             const statusDiv = document.getElementById('status');
             const downloadBtn = document.getElementById('downloadBtn');
             const stopBtn = document.getElementById('stopBtn');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = progressContainer.querySelector('.progress-fill');
+            const progressText = progressContainer.querySelector('.progress-text');
             
             if (!options.url) {
                 addLogEntry('Please enter a URL', 'error');
@@ -639,6 +912,11 @@
             statusDiv.innerHTML = '';
             downloadBtn.disabled = true;
             stopBtn.classList.add('visible');
+            
+            // Show progress bar immediately with initial state
+            progressContainer.style.display = 'block';
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Scanning...';
             
             fetch('/download', {
                 method: 'POST',
@@ -651,7 +929,6 @@
             .then(data => {
                 if (data.status === 'started') {
                     currentDownloadId = data.url_id;
-                    listenToDownloadProgress(data.url_id);
                 } else {
                     handleDownloadError(data.message || 'Failed to start download');
                 }
@@ -675,9 +952,7 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.status === 'success') {
-                    // The final message will come through the event stream
-                } else {
+                if (data.status !== 'success') {
                     console.error('Error stopping download:', data.error);
                     stopBtn.disabled = false;
                 }
@@ -695,60 +970,9 @@
             downloadBtn.disabled = false;
             stopBtn.classList.remove('visible');
             currentDownloadId = null;
+            // Hide progress bar on error
+            updateProgressBar(null);
         }
-
-        function listenToDownloadProgress(urlId) {
-            const eventSource = new EventSource(`/stream/${urlId}`);
-            const downloadBtn = document.getElementById('downloadBtn');
-            const stopBtn = document.getElementById('stopBtn');
-
-            eventSource.onmessage = function(event) {
-                if (event.data === 'keepalive') return;
-
-                try {
-                    const data = JSON.parse(event.data);
-                    
-                    // Don't show error messages if we're in the process of stopping
-                    if (data.status === 'error' && stopBtn.disabled) {
-                        return;
-                    }
-
-                    addLogEntry(data.message, data.status);
-
-                    if (data.is_final) {
-                        downloadBtn.disabled = false;
-                        stopBtn.classList.remove('visible');
-                        stopBtn.disabled = false;
-                        currentDownloadId = null;
-                        eventSource.close();
-                        // Update downloads list after completion
-                        updateDownloadsList();
-                    }
-                } catch (error) {
-                    console.error('Error parsing event data:', error);
-                }
-            };
-
-            eventSource.onerror = function() {
-                eventSource.close();
-                downloadBtn.disabled = false;
-                stopBtn.classList.remove('visible');
-                stopBtn.disabled = false;
-                currentDownloadId = null;
-            };
-        }
-
-        function addLogEntry(message, status) {
-            const statusDiv = document.getElementById('status');
-            const entry = document.createElement('div');
-            entry.className = `log-entry ${status}`;
-            entry.textContent = message;
-            statusDiv.appendChild(entry);
-            statusDiv.scrollTop = statusDiv.scrollHeight;
-        }
-
-        // Start periodic updates of downloads list
-        setInterval(updateDownloadsList, 5000);
     </script>
 </body>
 </html>

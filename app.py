@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, jsonify, Response, send_from_directory
+from flask import Flask, render_template, request, jsonify, Response, send_from_directory, url_for
+from flask_socketio import SocketIO, emit
 import subprocess
 import os
 import logging
@@ -12,8 +13,11 @@ import signal
 import psutil
 from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
+from datetime import datetime
 
-app = Flask(__name__)
+app = Flask(__name__, static_url_path='/static')
+app.config['SECRET_KEY'] = 'secret!'  # Required for Flask-SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configure logging
 if not os.path.exists('logs'):
@@ -82,6 +86,12 @@ def build_gallery_dl_command(url, download_path, options):
     """Build gallery-dl command with filters based on options."""
     command = ['gallery-dl', url, '-D', download_path, '--verbose']
     
+    # Add browser cookies for authentication if enabled
+    auth_options = options.get('authentication', {})
+    if auth_options.get('useCookies'):
+        browser = auth_options.get('browser', 'chrome')
+        command.extend(['--cookies-from-browser', f'{browser}'])
+    
     # Add post limit if specified
     if options.get('postLimit') == 'limited':
         post_count = options.get('postCount', 20)
@@ -91,9 +101,9 @@ def build_gallery_dl_command(url, download_path, options):
     # Add media type filter if specified
     media_type = options.get('mediaType')
     if media_type == 'images':
-        command.extend(['--filter', "extension in ['jpg','jpeg','png','gif','webp']"])
+        command.extend(['--filter', "extension in ('jpg','jpeg','png','gif','webp')"])
     elif media_type == 'videos':
-        command.extend(['--filter', "extension in ['mp4','webm','mov']"])
+        command.extend(['--filter', "extension in ('mp4','webm','mov')"])
     
     return command
 
@@ -125,30 +135,66 @@ def generate_thumbnail(video_path):
 class DownloadTracker:
     def __init__(self):
         self.download_count = 0
+        self.total_files = 0
         self.scanning = False
+        self.scanning_complete = False
         self.has_started = False
         self.last_activity = time.time()
         self.completed = False
         self.stopped = False
 
+def format_error_message(error_msg):
+    """Format error messages to be more user-friendly."""
+    if "'401 Unauthorized'" in error_msg or 'HTTP redirect to login page' in error_msg:
+        return ("This content requires authentication. Try enabling browser cookies in Advanced Settings "
+                "and make sure you're logged into the site in your selected browser.")
+    elif 'HTTP 404' in error_msg:
+        return "The URL could not be found. Please check if the content still exists."
+    elif 'HTTP 429' in error_msg:
+        return "Too many requests. Try enabling browser cookies in Advanced Settings or wait a while before trying again."
+    elif 'HTTP 403' in error_msg:
+        return "Access forbidden. Try enabling browser cookies in Advanced Settings or check if the content is private."
+    return error_msg
+
+def emit_download_update(url_id, status, message, is_final=False, progress=None):
+    """Emit download update through WebSocket."""
+    # Format error messages to be more user-friendly
+    if status == 'error':
+        message = format_error_message(message)
+    
+    data = {
+        'url_id': url_id,
+        'status': status,
+        'message': message,
+        'is_final': is_final,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    if progress:
+        data['progress'] = progress
+        
+    socketio.emit('download_update', data, namespace='/downloads')
+    
+    # Update status in memory
+    if url_id not in download_status:
+        download_status[url_id] = {
+            'status': status,
+            'messages': []
+        }
+    download_status[url_id]['status'] = status
+    download_status[url_id]['messages'].append(message)
+
 def stream_process_output(process, url_id):
-    """Stream process output line by line and update status."""
+    """Stream process output and emit updates through WebSocket."""
     error_output = []
     tracker = DownloadTracker()
-    files_found = set()  # Track unique files found
-    files_downloaded = set()  # Track successfully downloaded files
+    files_found = set()
+    files_downloaded = set()
     downloading_started = False
-    scanning_complete = False
+    last_update = time.time()
     
-    def send_message(status, message, is_final=False):
-        app.logger.debug(f"Sending message - Status: {status}, Message: {message}, Final: {is_final}")
-        if url_id in message_queues:  # Check if queue still exists
-            message_queues[url_id].put({
-                'url_id': url_id,
-                'status': status,
-                'message': message,
-                'is_final': is_final
-            })
+    # Emit initial status immediately
+    emit_download_update(url_id, 'info', 'Initializing download...')
     
     def handle_process_completion():
         app.logger.debug(f"Process completed - Files found: {len(files_found)}, Downloads: {len(files_downloaded)}")
@@ -159,24 +205,31 @@ def stream_process_output(process, url_id):
                 generate_thumbnail(file_path)
         
         if tracker.stopped:
-            send_message('stopped', 
-                f'Download stopped by user. {len(files_downloaded)} file{"s" if len(files_downloaded) != 1 else ""} were downloaded before stopping.', True)
+            emit_download_update(url_id, 'stopped', 
+                f'Download stopped by user. Downloaded {len(files_downloaded)} of {tracker.total_files} files.', True)
+            # Emit event to update downloads list even when stopped
+            socketio.emit('downloads_updated', namespace='/downloads')
             return
             
         # If we found and downloaded at least one file
         if len(files_downloaded) > 0:
-            send_message('completed', 
-                f'All identified files retrieved. {len(files_downloaded)} file{"s" if len(files_downloaded) != 1 else ""} downloaded.', True)
+            emit_download_update(url_id, 'completed', 
+                f'Download complete. Successfully downloaded {len(files_downloaded)} of {tracker.total_files} files.', True)
+            # Emit event to update downloads list
+            socketio.emit('downloads_updated', namespace='/downloads')
             return
             
         # If we found files but didn't download any (they might already exist)
         if len(files_found) > 0:
-            send_message('completed', 
+            emit_download_update(url_id, 'completed', 
                 f'All {len(files_found)} files are already downloaded and up to date.', True)
+            # Emit event to update downloads list
+            socketio.emit('downloads_updated', namespace='/downloads')
             return
             
         # If we didn't find any files at all
-        send_message('error', 'No files were found. Please check if the URL is correct and accessible.', True)
+        emit_download_update(url_id, 'error', 
+            'No files were found. Please check if the URL is correct and accessible.', True)
         
         tracker.completed = True
     
@@ -197,35 +250,73 @@ def stream_process_output(process, url_id):
                     
                     # Track scanning state
                     if "Starting DownloadJob" in clean_line:
-                        send_message('scanning', 'Starting download job...')
+                        emit_download_update(url_id, 'scanning', 'Starting download job...')
                         tracker.scanning = True
                         tracker.has_started = True
                     
-                    # Detect when scanning is complete (Cursor: None appears)
+                    # Show connecting message for any HTTP activity
+                    elif "GET http" in clean_line or "POST http" in clean_line:
+                        current_time = time.time()
+                        # Only show connection messages if more than 1 second has passed since last update
+                        if current_time - last_update > 1:
+                            emit_download_update(url_id, 'info', 'Connecting to server...')
+                            last_update = current_time
+                    
+                    # Detect when scanning is complete
                     elif "Cursor: None" in clean_line:
-                        scanning_complete = True
-                        send_message('scanning', 'Finished scanning for files.')
+                        tracker.scanning_complete = True
+                        tracker.total_files = len(files_found)
+                        emit_download_update(url_id, 'scanning', f'Scan complete. Found {tracker.total_files} files to download.')
                     
                     # Track files being discovered
                     elif clean_line.startswith('./gallery-dl/') or clean_line.startswith('downloads/'):
                         file_path = clean_line
                         files_found.add(file_path)
-                        send_message('scanning', f'Found: {file_path}')
+                        emit_download_update(url_id, 'scanning', f'Found: {file_path}')
                     
                     # Track actual downloads
                     elif 'Downloaded' in clean_line:
                         downloading_started = True
-                        files_downloaded.add(clean_line)  # Add the full download message
+                        files_downloaded.add(clean_line)
                         tracker.last_activity = time.time()
-                        send_message('downloading', clean_line)
-                        # Send a progress update
-                        if len(files_downloaded) % 5 == 0:  # Every 5 downloads
-                            send_message('progress', 
+                        
+                        # Calculate progress percentage
+                        if tracker.total_files > 0:
+                            progress = {
+                                'current': len(files_downloaded),
+                                'total': tracker.total_files,
+                                'percentage': round((len(files_downloaded) / tracker.total_files) * 100, 1)
+                            }
+                            
+                            # Send download and progress updates
+                            emit_download_update(
+                                url_id, 
+                                'downloading', 
+                                clean_line,
+                                progress=progress
+                            )
+                            emit_download_update(
+                                url_id, 
+                                'progress', 
+                                f'Progress: {progress["current"]} of {progress["total"]} files ({progress["percentage"]}%)',
+                                progress=progress
+                            )
+                        else:
+                            # Fallback if total files unknown
+                            emit_download_update(url_id, 'downloading', clean_line)
+                            emit_download_update(url_id, 'progress', 
                                 f'Progress: {len(files_downloaded)} files downloaded so far...')
+                        
+                        # Emit event to update downloads list for every file
+                        socketio.emit('downloads_updated', namespace='/downloads')
+                    
+                    # Show authentication messages
+                    elif any(auth_text in clean_line.lower() for auth_text in ['login', 'auth', 'cookie', '401 unauthorized']):
+                        emit_download_update(url_id, 'info', 'Authentication required...')
                     
                     # Other informational messages
                     else:
-                        send_message('info', clean_line)
+                        emit_download_update(url_id, 'info', clean_line)
         except (ValueError, IOError) as e:
             if tracker.stopped:
                 handle_process_completion()
@@ -236,7 +327,7 @@ def stream_process_output(process, url_id):
     try:
         # Process has finished, collect any error output
         error = process.stderr.read()
-        if error and not tracker.stopped:  # Only log error if not intentionally stopped
+        if error and not tracker.stopped:
             error_output.append(error.strip())
             app.logger.debug(f"Error output: {error.strip()}")
         
@@ -248,11 +339,11 @@ def stream_process_output(process, url_id):
         elif return_code == 0:
             handle_process_completion()
         else:
-            if not tracker.stopped:  # Only send error if not intentionally stopped
+            if not tracker.stopped:
                 error_msg = '\n'.join(error_output) if error_output else 'Download failed with unknown error'
-                send_message('error', f'Download failed: {error_msg}', True)
+                emit_download_update(url_id, 'error', f'Download failed: {error_msg}', True)
     except Exception as e:
-        if not tracker.stopped:  # Only log error if not intentionally stopped
+        if not tracker.stopped:
             app.logger.error(f"Error during process completion: {str(e)}")
     finally:
         # Clean up
@@ -325,7 +416,8 @@ def download():
     options = {
         'postLimit': data.get('postLimit', 'all'),
         'postCount': data.get('postCount'),
-        'mediaType': data.get('mediaType', 'all')
+        'mediaType': data.get('mediaType', 'all'),
+        'authentication': data.get('authentication', {})
     }
     
     url, folder_name, error = validate_url(url)
@@ -350,9 +442,6 @@ def download():
         # Create specific folder for this download
         download_path = os.path.join('downloads', folder_name)
         os.makedirs(download_path, exist_ok=True)
-        
-        # Create message queue for this download
-        message_queues[url_id] = queue.Queue()
         
         # Build gallery-dl command with options
         command = build_gallery_dl_command(url, download_path, options)
@@ -437,15 +526,6 @@ def stop_download(url_id):
         
         app.logger.info(f'Stopped download process for ID: {url_id}')
         
-        # Clean up
-        if url_id in message_queues:
-            message_queues[url_id].put({
-                'url_id': url_id,
-                'status': 'stopped',
-                'message': 'Download stopped by user',
-                'is_final': True
-            })
-        
         return jsonify({'status': 'success', 'message': 'Download stopped'})
         
     except Exception as e:
@@ -456,58 +536,6 @@ def stop_download(url_id):
         # Ensure we clean up even if there's an error
         if url_id in active_processes:
             del active_processes[url_id]
-
-@app.route('/status/<url_id>')
-def get_status(url_id):
-    """Get the current status of a download."""
-    if url_id not in download_status:
-        return jsonify({'error': 'Download ID not found'}), 404
-    
-    return jsonify(download_status[url_id])
-
-@app.route('/stream/<url_id>')
-def stream(url_id):
-    """Stream download progress events."""
-    if url_id not in message_queues:
-        return jsonify({'error': 'Download ID not found'}), 404
-
-    def generate():
-        while True:
-            # Check if download is completed, failed, or stopped
-            if (url_id in download_status and 
-                download_status[url_id]['status'] in ['completed', 'error', 'stopped']):
-                break
-                
-            try:
-                message = message_queues[url_id].get(timeout=1)
-                # Update status
-                if url_id not in download_status:
-                    download_status[url_id] = {
-                        'status': message['status'],
-                        'messages': []
-                    }
-                
-                download_status[url_id]['status'] = message['status']
-                download_status[url_id]['messages'].append(message['message'])
-                
-                # Send the event data as a JSON string
-                event_data = {
-                    'message': message['message'],
-                    'status': message['status'],
-                    'is_final': message.get('is_final', False)
-                }
-                yield f"data: {json.dumps(event_data)}\n\n"
-                
-                # If this is the final message, clean up
-                if message.get('is_final', False):
-                    if url_id in message_queues:
-                        del message_queues[url_id]
-                    break
-                    
-            except queue.Empty:
-                yield f"data: keepalive\n\n"
-                
-    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/downloads')
 def list_downloads():
@@ -558,6 +586,8 @@ def delete_source(source):
         shutil.rmtree(source_path)
         
         app.logger.info(f'Deleted source folder: {source}')
+        # Emit event to update downloads list
+        socketio.emit('downloads_updated', namespace='/downloads')
         return jsonify({'status': 'success', 'message': f'Successfully deleted {source}'})
         
     except Exception as e:
@@ -565,5 +595,15 @@ def delete_source(source):
         app.logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
 
+@socketio.on('connect', namespace='/downloads')
+def handle_connect():
+    """Handle WebSocket connection."""
+    app.logger.info('Client connected to WebSocket')
+
+@socketio.on('disconnect', namespace='/downloads')
+def handle_disconnect():
+    """Handle WebSocket disconnection."""
+    app.logger.info('Client disconnected from WebSocket')
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001)
+    socketio.run(app, host='0.0.0.0', port=5001, debug=True)
