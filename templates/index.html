@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gallery-DL Web Interface</title>
-    <!-- Use local Socket.IO client library -->
     <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
     <style>
         body {
@@ -369,7 +368,13 @@
         }
         .progress-container {
             margin-top: 10px;
-            display: none;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease;
+        }
+        .progress-container.visible {
+            opacity: 1;
+            visibility: visible;
         }
         .progress-bar {
             width: 100%;
@@ -742,19 +747,26 @@
             const progressText = progressContainer.querySelector('.progress-text');
             
             if (progress) {
-                progressContainer.style.display = 'block';
-                progressFill.style.width = `${progress.percentage}%`;
-                progressText.textContent = `${progress.current} of ${progress.total} (${progress.percentage}%)`;
+                progressContainer.classList.add('visible');
+                if (progress.scanning) {
+                    progressFill.style.width = '0%';
+                    progressText.textContent = 'Scanning...';
+                } else {
+                    progressFill.style.width = `${progress.percentage}%`;
+                    progressText.textContent = `${progress.current} of ${progress.total} files (${progress.percentage}%)`;
+                }
             } else {
-                progressContainer.style.display = 'none';
+                progressContainer.classList.remove('visible');
             }
         }
 
         function handleDownloadUpdate(data) {
             addLogEntry(data.message, data.status, data.progress);
 
-            // Update progress bar
-            if (data.progress) {
+            // Update progress based on status
+            if (data.status === 'scanning') {
+                updateProgressBar({ scanning: true });
+            } else if (data.progress) {
                 updateProgressBar(data.progress);
             }
 
@@ -765,7 +777,6 @@
                 stopBtn.classList.remove('visible');
                 stopBtn.disabled = false;
                 currentDownloadId = null;
-                // Hide progress bar on completion
                 updateProgressBar(null);
             }
         }
@@ -899,24 +910,18 @@
             const statusDiv = document.getElementById('status');
             const downloadBtn = document.getElementById('downloadBtn');
             const stopBtn = document.getElementById('stopBtn');
-            const progressContainer = document.getElementById('progressContainer');
-            const progressFill = progressContainer.querySelector('.progress-fill');
-            const progressText = progressContainer.querySelector('.progress-text');
             
             if (!options.url) {
                 addLogEntry('Please enter a URL', 'error');
                 return;
             }
 
-            // Clear previous status and update buttons
             statusDiv.innerHTML = '';
             downloadBtn.disabled = true;
             stopBtn.classList.add('visible');
             
-            // Show progress bar immediately with initial state
-            progressContainer.style.display = 'block';
-            progressFill.style.width = '0%';
-            progressText.textContent = 'Scanning...';
+            // Show initial scanning state
+            updateProgressBar({ scanning: true });
             
             fetch('/download', {
                 method: 'POST',

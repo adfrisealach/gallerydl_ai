@@ -170,7 +170,10 @@ def emit_download_update(url_id, status, message, is_final=False, progress=None)
         'timestamp': datetime.now().isoformat()
     }
     
-    if progress:
+    # Add scanning flag for scanning status
+    if status == 'scanning':
+        data['progress'] = {'scanning': True}
+    elif progress:
         data['progress'] = progress
         
     socketio.emit('download_update', data, namespace='/downloads')
@@ -193,8 +196,8 @@ def stream_process_output(process, url_id):
     downloading_started = False
     last_update = time.time()
     
-    # Emit initial status immediately
-    emit_download_update(url_id, 'info', 'Initializing download...')
+    # Emit initial scanning status
+    emit_download_update(url_id, 'scanning', 'Initializing download...')
     
     def handle_process_completion():
         app.logger.debug(f"Process completed - Files found: {len(files_found)}, Downloads: {len(files_downloaded)}")
@@ -207,27 +210,21 @@ def stream_process_output(process, url_id):
         if tracker.stopped:
             emit_download_update(url_id, 'stopped', 
                 f'Download stopped by user. Downloaded {len(files_downloaded)} of {tracker.total_files} files.', True)
-            # Emit event to update downloads list even when stopped
             socketio.emit('downloads_updated', namespace='/downloads')
             return
             
-        # If we found and downloaded at least one file
         if len(files_downloaded) > 0:
             emit_download_update(url_id, 'completed', 
                 f'Download complete. Successfully downloaded {len(files_downloaded)} of {tracker.total_files} files.', True)
-            # Emit event to update downloads list
             socketio.emit('downloads_updated', namespace='/downloads')
             return
             
-        # If we found files but didn't download any (they might already exist)
         if len(files_found) > 0:
             emit_download_update(url_id, 'completed', 
                 f'All {len(files_found)} files are already downloaded and up to date.', True)
-            # Emit event to update downloads list
             socketio.emit('downloads_updated', namespace='/downloads')
             return
             
-        # If we didn't find any files at all
         emit_download_update(url_id, 'error', 
             'No files were found. Please check if the URL is correct and accessible.', True)
         
@@ -254,33 +251,27 @@ def stream_process_output(process, url_id):
                         tracker.scanning = True
                         tracker.has_started = True
                     
-                    # Show connecting message for any HTTP activity
                     elif "GET http" in clean_line or "POST http" in clean_line:
                         current_time = time.time()
-                        # Only show connection messages if more than 1 second has passed since last update
                         if current_time - last_update > 1:
-                            emit_download_update(url_id, 'info', 'Connecting to server...')
+                            emit_download_update(url_id, 'scanning', 'Connecting to server...')
                             last_update = current_time
                     
-                    # Detect when scanning is complete
                     elif "Cursor: None" in clean_line:
                         tracker.scanning_complete = True
                         tracker.total_files = len(files_found)
                         emit_download_update(url_id, 'scanning', f'Scan complete. Found {tracker.total_files} files to download.')
                     
-                    # Track files being discovered
                     elif clean_line.startswith('./gallery-dl/') or clean_line.startswith('downloads/'):
                         file_path = clean_line
                         files_found.add(file_path)
                         emit_download_update(url_id, 'scanning', f'Found: {file_path}')
                     
-                    # Track actual downloads
                     elif 'Downloaded' in clean_line:
                         downloading_started = True
                         files_downloaded.add(clean_line)
                         tracker.last_activity = time.time()
                         
-                        # Calculate progress percentage
                         if tracker.total_files > 0:
                             progress = {
                                 'current': len(files_downloaded),
@@ -288,33 +279,20 @@ def stream_process_output(process, url_id):
                                 'percentage': round((len(files_downloaded) / tracker.total_files) * 100, 1)
                             }
                             
-                            # Send download and progress updates
                             emit_download_update(
                                 url_id, 
                                 'downloading', 
                                 clean_line,
                                 progress=progress
                             )
-                            emit_download_update(
-                                url_id, 
-                                'progress', 
-                                f'Progress: {progress["current"]} of {progress["total"]} files ({progress["percentage"]}%)',
-                                progress=progress
-                            )
                         else:
-                            # Fallback if total files unknown
                             emit_download_update(url_id, 'downloading', clean_line)
-                            emit_download_update(url_id, 'progress', 
-                                f'Progress: {len(files_downloaded)} files downloaded so far...')
                         
-                        # Emit event to update downloads list for every file
                         socketio.emit('downloads_updated', namespace='/downloads')
                     
-                    # Show authentication messages
                     elif any(auth_text in clean_line.lower() for auth_text in ['login', 'auth', 'cookie', '401 unauthorized']):
                         emit_download_update(url_id, 'info', 'Authentication required...')
                     
-                    # Other informational messages
                     else:
                         emit_download_update(url_id, 'info', clean_line)
         except (ValueError, IOError) as e:
@@ -325,7 +303,6 @@ def stream_process_output(process, url_id):
             break
     
     try:
-        # Process has finished, collect any error output
         error = process.stderr.read()
         if error and not tracker.stopped:
             error_output.append(error.strip())
@@ -346,7 +323,6 @@ def stream_process_output(process, url_id):
         if not tracker.stopped:
             app.logger.error(f"Error during process completion: {str(e)}")
     finally:
-        # Clean up
         if url_id in active_processes:
             del active_processes[url_id]
 
