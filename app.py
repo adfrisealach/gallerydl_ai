@@ -7,6 +7,9 @@ import queue
 import time
 import re
 import json
+import shutil
+import signal
+import psutil
 from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
@@ -40,6 +43,7 @@ app.logger.setLevel(logging.DEBUG)
 # Global storage
 download_status = {}
 message_queues = {}
+active_processes = {}  # Store active download processes
 
 def get_folder_name(url):
     """Extract site name and username from URL to create folder name."""
@@ -92,6 +96,31 @@ def build_gallery_dl_command(url, download_path, options):
     
     return command
 
+def generate_thumbnail(video_path):
+    """Generate a thumbnail for a video file."""
+    try:
+        import ffmpeg
+        thumbnail_path = video_path + '.thumb.jpg'
+        
+        if os.path.exists(thumbnail_path):
+            return
+            
+        # Extract a frame from the middle of the video
+        probe = ffmpeg.probe(video_path)
+        duration = float(probe['streams'][0]['duration'])
+        time = duration / 2
+        
+        (
+            ffmpeg
+            .input(video_path, ss=time)
+            .filter('scale', 480, -1)
+            .output(thumbnail_path, vframes=1)
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+    except Exception as e:
+        app.logger.error(f"Error generating thumbnail for {video_path}: {str(e)}")
+
 class DownloadTracker:
     def __init__(self):
         self.download_count = 0
@@ -99,6 +128,7 @@ class DownloadTracker:
         self.has_started = False
         self.last_activity = time.time()
         self.completed = False
+        self.stopped = False
 
 def stream_process_output(process, url_id):
     """Stream process output line by line and update status."""
@@ -111,12 +141,13 @@ def stream_process_output(process, url_id):
     
     def send_message(status, message, is_final=False):
         app.logger.debug(f"Sending message - Status: {status}, Message: {message}, Final: {is_final}")
-        message_queues[url_id].put({
-            'url_id': url_id,
-            'status': status,
-            'message': message,
-            'is_final': is_final
-        })
+        if url_id in message_queues:  # Check if queue still exists
+            message_queues[url_id].put({
+                'url_id': url_id,
+                'status': status,
+                'message': message,
+                'is_final': is_final
+            })
     
     def handle_process_completion():
         app.logger.debug(f"Process completed - Files found: {len(files_found)}, Downloads: {len(files_downloaded)}")
@@ -126,6 +157,11 @@ def stream_process_output(process, url_id):
             if any(ext in file_path.lower() for ext in ['.mp4', '.webm', '.mov']):
                 generate_thumbnail(file_path)
         
+        if tracker.stopped:
+            send_message('stopped', 
+                f'Download stopped by user. {len(files_downloaded)} file{"s" if len(files_downloaded) != 1 else ""} were downloaded before stopping.', True)
+            return
+            
         # If we found and downloaded at least one file
         if len(files_downloaded) > 0:
             send_message('completed', 
@@ -144,61 +180,83 @@ def stream_process_output(process, url_id):
         tracker.completed = True
     
     while True:
-        line = process.stdout.readline()
-        if not line and process.poll() is not None:
+        if tracker.stopped:
+            handle_process_completion()
             break
             
-        if line:
-            clean_line = line.strip()
-            if clean_line:
-                app.logger.debug(f"Gallery-DL output: {clean_line}")
+        try:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
                 
-                # Track scanning state
-                if "Starting DownloadJob" in clean_line:
-                    send_message('scanning', 'Starting download job...')
-                    tracker.scanning = True
-                    tracker.has_started = True
-                
-                # Detect when scanning is complete (Cursor: None appears)
-                elif "Cursor: None" in clean_line:
-                    scanning_complete = True
-                    send_message('scanning', 'Finished scanning for files.')
-                
-                # Track files being discovered
-                elif clean_line.startswith('./gallery-dl/') or clean_line.startswith('downloads/'):
-                    file_path = clean_line
-                    files_found.add(file_path)
-                    send_message('scanning', f'Found: {file_path}')
-                
-                # Track actual downloads
-                elif 'Downloaded' in clean_line:
-                    downloading_started = True
-                    files_downloaded.add(clean_line)  # Add the full download message
-                    tracker.last_activity = time.time()
-                    send_message('downloading', clean_line)
-                    # Send a progress update
-                    if len(files_downloaded) % 5 == 0:  # Every 5 downloads
-                        send_message('progress', 
-                            f'Progress: {len(files_downloaded)} files downloaded so far...')
-                
-                # Other informational messages
-                else:
-                    send_message('info', clean_line)
+            if line:
+                clean_line = line.strip()
+                if clean_line:
+                    app.logger.debug(f"Gallery-DL output: {clean_line}")
+                    
+                    # Track scanning state
+                    if "Starting DownloadJob" in clean_line:
+                        send_message('scanning', 'Starting download job...')
+                        tracker.scanning = True
+                        tracker.has_started = True
+                    
+                    # Detect when scanning is complete (Cursor: None appears)
+                    elif "Cursor: None" in clean_line:
+                        scanning_complete = True
+                        send_message('scanning', 'Finished scanning for files.')
+                    
+                    # Track files being discovered
+                    elif clean_line.startswith('./gallery-dl/') or clean_line.startswith('downloads/'):
+                        file_path = clean_line
+                        files_found.add(file_path)
+                        send_message('scanning', f'Found: {file_path}')
+                    
+                    # Track actual downloads
+                    elif 'Downloaded' in clean_line:
+                        downloading_started = True
+                        files_downloaded.add(clean_line)  # Add the full download message
+                        tracker.last_activity = time.time()
+                        send_message('downloading', clean_line)
+                        # Send a progress update
+                        if len(files_downloaded) % 5 == 0:  # Every 5 downloads
+                            send_message('progress', 
+                                f'Progress: {len(files_downloaded)} files downloaded so far...')
+                    
+                    # Other informational messages
+                    else:
+                        send_message('info', clean_line)
+        except (ValueError, IOError) as e:
+            if tracker.stopped:
+                handle_process_completion()
+                break
+            app.logger.error(f"Error reading process output: {str(e)}")
+            break
     
-    # Process has finished, collect any error output
-    error = process.stderr.read()
-    if error:
-        error_output.append(error.strip())
-        app.logger.debug(f"Error output: {error.strip()}")
-    
-    return_code = process.wait()
-    app.logger.debug(f"Process return code: {return_code}")
-    
-    if return_code == 0:
-        handle_process_completion()
-    else:
-        error_msg = '\n'.join(error_output) if error_output else 'Download failed with unknown error'
-        send_message('error', f'Download failed: {error_msg}', True)
+    try:
+        # Process has finished, collect any error output
+        error = process.stderr.read()
+        if error and not tracker.stopped:  # Only log error if not intentionally stopped
+            error_output.append(error.strip())
+            app.logger.debug(f"Error output: {error.strip()}")
+        
+        return_code = process.wait()
+        app.logger.debug(f"Process return code: {return_code}")
+        
+        if tracker.stopped:
+            handle_process_completion()
+        elif return_code == 0:
+            handle_process_completion()
+        else:
+            if not tracker.stopped:  # Only send error if not intentionally stopped
+                error_msg = '\n'.join(error_output) if error_output else 'Download failed with unknown error'
+                send_message('error', f'Download failed: {error_msg}', True)
+    except Exception as e:
+        if not tracker.stopped:  # Only log error if not intentionally stopped
+            app.logger.error(f"Error during process completion: {str(e)}")
+    finally:
+        # Clean up
+        if url_id in active_processes:
+            del active_processes[url_id]
 
 @app.route('/')
 def index():
@@ -305,8 +363,15 @@ def download():
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            preexec_fn=os.setsid  # Create new process group
         )
+        
+        # Store the process
+        active_processes[url_id] = {
+            'process': process,
+            'tracker': DownloadTracker()
+        }
         
         # Start thread to handle process output
         thread = threading.Thread(
@@ -332,6 +397,65 @@ def download():
             'message': error_msg
         }), 500
 
+@app.route('/stop/<url_id>', methods=['POST'])
+def stop_download(url_id):
+    """Stop an active download process."""
+    if url_id not in active_processes:
+        return jsonify({'error': 'Download not found or already completed'}), 404
+        
+    try:
+        process_info = active_processes[url_id]
+        process = process_info['process']
+        tracker = process_info['tracker']
+        
+        # Mark the download as stopped
+        tracker.stopped = True
+        
+        try:
+            # Try to terminate the process group
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except OSError:
+            # If that fails, try to terminate just the process
+            try:
+                process.terminate()
+            except:
+                pass
+        
+        # Give it a moment to terminate gracefully
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            # If it doesn't terminate gracefully, force kill
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except OSError:
+                try:
+                    process.kill()
+                except:
+                    pass
+        
+        app.logger.info(f'Stopped download process for ID: {url_id}')
+        
+        # Clean up
+        if url_id in message_queues:
+            message_queues[url_id].put({
+                'url_id': url_id,
+                'status': 'stopped',
+                'message': 'Download stopped by user',
+                'is_final': True
+            })
+        
+        return jsonify({'status': 'success', 'message': 'Download stopped'})
+        
+    except Exception as e:
+        error_msg = f'Error stopping download: {str(e)}'
+        app.logger.error(error_msg)
+        return jsonify({'error': error_msg}), 500
+    finally:
+        # Ensure we clean up even if there's an error
+        if url_id in active_processes:
+            del active_processes[url_id]
+
 @app.route('/status/<url_id>')
 def get_status(url_id):
     """Get the current status of a download."""
@@ -348,9 +472,9 @@ def stream(url_id):
 
     def generate():
         while True:
-            # Check if download is completed or failed
+            # Check if download is completed, failed, or stopped
             if (url_id in download_status and 
-                download_status[url_id]['status'] in ['completed', 'error']):
+                download_status[url_id]['status'] in ['completed', 'error', 'stopped']):
                 break
                 
             try:
@@ -372,6 +496,13 @@ def stream(url_id):
                     'is_final': message.get('is_final', False)
                 }
                 yield f"data: {json.dumps(event_data)}\n\n"
+                
+                # If this is the final message, clean up
+                if message.get('is_final', False):
+                    if url_id in message_queues:
+                        del message_queues[url_id]
+                    break
+                    
             except queue.Empty:
                 yield f"data: keepalive\n\n"
                 
@@ -411,6 +542,27 @@ def list_downloads():
     except Exception as e:
         app.logger.error(f'Error listing downloads: {str(e)}')
         return jsonify({'error': str(e)}), 500
+
+@app.route('/delete/<source>', methods=['DELETE'])
+def delete_source(source):
+    """Delete a source folder and all its contents."""
+    try:
+        downloads_path = 'downloads'
+        source_path = os.path.join(downloads_path, source)
+        
+        if not os.path.exists(source_path):
+            return jsonify({'error': 'Source not found'}), 404
+            
+        # Delete the directory and all its contents
+        shutil.rmtree(source_path)
+        
+        app.logger.info(f'Deleted source folder: {source}')
+        return jsonify({'status': 'success', 'message': f'Successfully deleted {source}'})
+        
+    except Exception as e:
+        error_msg = f'Error deleting source: {str(e)}'
+        app.logger.error(error_msg)
+        return jsonify({'error': error_msg}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001)

@@ -1,12 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
-<!-- Previous head content and styles remain unchanged -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gallery-DL Web Interface</title>
     <style>
-        /* Previous styles remain unchanged */
         body {
             font-family: Arial, sans-serif;
             max-width: 1000px;
@@ -67,6 +65,11 @@
         input[type="number"] {
             width: 80px;
         }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
         button {
             background-color: #4CAF50;
             color: white;
@@ -76,7 +79,6 @@
             cursor: pointer;
             font-size: 16px;
             transition: background-color 0.3s;
-            margin-top: 20px;
         }
         button:hover {
             background-color: #45a049;
@@ -84,6 +86,38 @@
         button:disabled {
             background-color: #cccccc;
             cursor: not-allowed;
+        }
+        .stop-btn {
+            background-color: #dc3545;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+            display: none;
+        }
+        .stop-btn:hover {
+            background-color: #c82333;
+        }
+        .stop-btn.visible {
+            display: inline-block;
+        }
+        .delete-btn {
+            background-color: #dc3545;
+            color: white;
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+            margin-left: 5px;
+            white-space: nowrap;
+        }
+        .delete-btn:hover {
+            background-color: #c82333;
         }
         .options-container {
             background-color: #f9f9f9;
@@ -178,6 +212,12 @@
             color: #616161;
             border-left: 4px solid #9e9e9e;
         }
+        .log-entry.stopped {
+            background-color: #fff3e0;
+            color: #e65100;
+            border-left: 4px solid #e65100;
+            font-weight: bold;
+        }
         .tooltip {
             position: relative;
             display: inline-flex;
@@ -246,14 +286,21 @@
         }
         .file-stats {
             display: flex;
+            align-items: center;
             gap: 15px;
             font-size: 0.9em;
             color: #666;
+        }
+        .stats-group {
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
         .stat-item {
             display: flex;
             align-items: center;
             gap: 5px;
+            white-space: nowrap;
         }
         .no-files {
             text-align: center;
@@ -261,10 +308,68 @@
             color: #666;
             font-style: italic;
         }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        .modal-title {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .modal-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        .modal-btn.confirm {
+            background-color: #dc3545;
+            color: white;
+        }
+        .modal-btn.cancel {
+            background-color: #6c757d;
+            color: white;
+        }
         @media (max-width: 768px) {
             .options-container {
                 flex-direction: column;
                 gap: 20px;
+            }
+            .file-stats {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .stats-group {
+                flex-wrap: wrap;
             }
         }
     </style>
@@ -339,7 +444,10 @@
             </div>
         </div>
 
-        <button id="downloadBtn" onclick="startDownload()">Download</button>
+        <div class="button-group">
+            <button id="downloadBtn" onclick="startDownload()">Download</button>
+            <button id="stopBtn" class="stop-btn" onclick="stopDownload()">Stop Download</button>
+        </div>
         
         <div id="status"></div>
     </div>
@@ -349,7 +457,22 @@
         <div id="downloadsList"></div>
     </div>
 
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-title">Delete Confirmation</div>
+            <p>Are you sure you want to delete this folder and all its contents?</p>
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeDeleteModal()">Cancel</button>
+                <button class="modal-btn confirm" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        let currentDownloadId = null;
+        let sourceToDelete = null;
+
         // Load saved settings
         document.addEventListener('DOMContentLoaded', function() {
             const savedSettings = JSON.parse(localStorage.getItem('downloadSettings') || '{}');
@@ -400,6 +523,36 @@
             localStorage.setItem('downloadSettings', JSON.stringify(settings));
         }
 
+        function showDeleteModal(source) {
+            sourceToDelete = source;
+            document.getElementById('deleteModal').classList.add('active');
+        }
+
+        function closeDeleteModal() {
+            sourceToDelete = null;
+            document.getElementById('deleteModal').classList.remove('active');
+        }
+
+        function confirmDelete() {
+            if (!sourceToDelete) return;
+
+            fetch(`/delete/${sourceToDelete}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    updateDownloadsList();
+                } else {
+                    console.error('Error deleting source:', data.error);
+                }
+            })
+            .catch(error => console.error('Error:', error))
+            .finally(() => {
+                closeDeleteModal();
+            });
+        }
+
         function updateDownloadsList() {
             fetch('/downloads')
                 .then(response => response.json())
@@ -441,9 +594,12 @@
                                         <a href="/gallery/${source}" class="source-link">${source}</a>
                                     </div>
                                     <div class="file-stats">
-                                        <span class="stat-item">${data.imageCount} images</span>
-                                        <span class="stat-item">${data.videoCount} videos</span>
-                                        <span class="stat-item">${totalSizeMB} MB</span>
+                                        <div class="stats-group">
+                                            <span class="stat-item">${data.imageCount} images</span>
+                                            <span class="stat-item">${data.videoCount} videos</span>
+                                            <span class="stat-item">${totalSizeMB} MB</span>
+                                        </div>
+                                        <button class="delete-btn" onclick="showDeleteModal('${source}')">Delete</button>
                                     </div>
                                 </div>
                             </div>
@@ -472,15 +628,17 @@
             const options = getDownloadOptions();
             const statusDiv = document.getElementById('status');
             const downloadBtn = document.getElementById('downloadBtn');
+            const stopBtn = document.getElementById('stopBtn');
             
             if (!options.url) {
                 addLogEntry('Please enter a URL', 'error');
                 return;
             }
 
-            // Clear previous status and disable button
+            // Clear previous status and update buttons
             statusDiv.innerHTML = '';
             downloadBtn.disabled = true;
+            stopBtn.classList.add('visible');
             
             fetch('/download', {
                 method: 'POST',
@@ -492,6 +650,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'started') {
+                    currentDownloadId = data.url_id;
                     listenToDownloadProgress(data.url_id);
                 } else {
                     handleDownloadError(data.message || 'Failed to start download');
@@ -502,25 +661,65 @@
             });
         }
 
+        function stopDownload() {
+            if (!currentDownloadId) return;
+
+            const stopBtn = document.getElementById('stopBtn');
+            stopBtn.disabled = true;
+
+            // Add a clearer message about stopping
+            addLogEntry('Stopping download... (This may take a moment)', 'stopped');
+
+            fetch(`/stop/${currentDownloadId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // The final message will come through the event stream
+                } else {
+                    console.error('Error stopping download:', data.error);
+                    stopBtn.disabled = false;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                stopBtn.disabled = false;
+            });
+        }
+
         function handleDownloadError(message) {
             const downloadBtn = document.getElementById('downloadBtn');
+            const stopBtn = document.getElementById('stopBtn');
             addLogEntry(message, 'error');
             downloadBtn.disabled = false;
+            stopBtn.classList.remove('visible');
+            currentDownloadId = null;
         }
 
         function listenToDownloadProgress(urlId) {
             const eventSource = new EventSource(`/stream/${urlId}`);
             const downloadBtn = document.getElementById('downloadBtn');
+            const stopBtn = document.getElementById('stopBtn');
 
             eventSource.onmessage = function(event) {
                 if (event.data === 'keepalive') return;
 
                 try {
                     const data = JSON.parse(event.data);
+                    
+                    // Don't show error messages if we're in the process of stopping
+                    if (data.status === 'error' && stopBtn.disabled) {
+                        return;
+                    }
+
                     addLogEntry(data.message, data.status);
 
                     if (data.is_final) {
                         downloadBtn.disabled = false;
+                        stopBtn.classList.remove('visible');
+                        stopBtn.disabled = false;
+                        currentDownloadId = null;
                         eventSource.close();
                         // Update downloads list after completion
                         updateDownloadsList();
@@ -533,6 +732,9 @@
             eventSource.onerror = function() {
                 eventSource.close();
                 downloadBtn.disabled = false;
+                stopBtn.classList.remove('visible');
+                stopBtn.disabled = false;
+                currentDownloadId = null;
             };
         }
 
